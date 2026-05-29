@@ -1,0 +1,17 @@
+plan.txt
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Generated ML artifacts
+spectrograms/
+checkpoints/
+reports/
+*.pt
+*.pth
+
+# Local IDE/project metadata
+.idea/
