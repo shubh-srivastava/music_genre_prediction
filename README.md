@@ -13,6 +13,7 @@ preprocess.py                   # Convert audio to Mel-spectrogram PNG images
 train.py                        # Train the ResNet-18 CNN classifier
 evaluate.py                     # Evaluate a checkpoint
 predict.py                      # Predict one audio file
+predict_folder.py               # Predict every audio file in predict/
 audio.py                        # Audio loading and Mel-spectrogram image creation
 config.py                       # Shared paths and audio settings
 dataset.py                      # PyTorch Dataset for generated PNG spectrograms
@@ -76,12 +77,27 @@ Predict one song:
 python predict.py path\to\song.wav --checkpoint checkpoints/best_model.pt
 ```
 
+Predict every supported audio file inside the `predict/` folder and write a CSV:
+
+```bash
+python predict_folder.py --input-dir predict --checkpoint checkpoints/best_model.pt --output-csv predictions.csv
+```
+
+Run the Streamlit frontend:
+
+```bash
+streamlit run app.py
+```
+
+The frontend shows the prediction progress step by step: checkpoint loading, song slicing, spectrogram image creation, tensor conversion, CNN inference, and majority-vote aggregation.
+
 ## Generated Files
 
 - `spectrograms/images/` contains generated spectrogram PNG files.
 - `spectrograms/manifest.csv` maps each spectrogram image to its label and split.
 - `spectrograms/metadata.json` stores class names and audio preprocessing settings.
 - `checkpoints/best_model.pt` stores the best trained CNN checkpoint.
+- `predictions.csv` stores batch prediction results when using `predict_folder.py`.
 
 ## Notes
 

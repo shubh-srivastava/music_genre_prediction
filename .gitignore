@@ -1,4 +1,6 @@
 plan.txt
+explain.md
+predictions.csv
 
 # Python
 __pycache__/
@@ -15,3 +17,8 @@ reports/
 
 # Local IDE/project metadata
 .idea/
+
+
+predict/
+
+data/

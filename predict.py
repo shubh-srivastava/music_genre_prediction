@@ -9,7 +9,17 @@ from pathlib import Path
 from config import DEFAULT_CHECKPOINT_DIR, AudioConfig
 
 
-def predict_file(audio_path: Path, checkpoint_path: Path, device_name: str | None = None) -> dict:
+def _log(progress_callback, message: str) -> None:
+    if progress_callback is not None:
+        progress_callback(message)
+
+
+def predict_file(
+    audio_path: Path,
+    checkpoint_path: Path,
+    device_name: str | None = None,
+    progress_callback=None,
+) -> dict:
     import torch
 
     from audio import audio_to_mels, mel_to_image
@@ -21,28 +31,37 @@ def predict_file(audio_path: Path, checkpoint_path: Path, device_name: str | Non
     if not checkpoint_path.exists():
         raise FileNotFoundError(f"Checkpoint does not exist: {checkpoint_path}")
 
+    _log(progress_callback, f"Loading checkpoint: {checkpoint_path}")
     device = torch.device(device_name or ("cuda" if torch.cuda.is_available() else "cpu"))
     checkpoint = torch.load(checkpoint_path, map_location=device)
     classes = checkpoint["classes"]
     config = AudioConfig.from_dict(checkpoint.get("audio_config"))
     image_size = int(checkpoint.get("image_size", 224))
 
+    _log(progress_callback, f"Building CNN model on device: {device}")
     model = build_resnet18(num_classes=len(classes), pretrained=False).to(device)
     model.load_state_dict(checkpoint["model_state"])
     model.eval()
 
+    _log(progress_callback, f"Loading song and slicing into {config.segment_seconds:.1f}-second clips")
     mels = audio_to_mels(audio_path, config)
     if not mels:
         raise RuntimeError(f"Audio is shorter than one {config.segment_seconds}s segment: {audio_path}")
 
+    _log(progress_callback, f"Created {len(mels)} Mel-spectrogram images in memory")
+    _log(progress_callback, f"Resizing images to {image_size}x{image_size} and converting to tensors")
     tensors = [image_to_tensor(mel_to_image(mel), image_size) for mel in mels]
     batch = torch.stack(tensors).to(device)
+
+    _log(progress_callback, "Running spectrogram images through the CNN")
     with torch.no_grad():
         probs = torch.softmax(model(batch), dim=1)
 
+    _log(progress_callback, "Aggregating chunk predictions with majority voting")
     predicted_indices = probs.argmax(dim=1).cpu().tolist()
     votes = Counter(predicted_indices)
     winner_index, winner_votes = votes.most_common(1)[0]
+    mean_probs = probs.mean(dim=0).cpu().tolist()
     mean_confidence = probs[:, winner_index].mean().item()
 
     return {
@@ -51,6 +70,10 @@ def predict_file(audio_path: Path, checkpoint_path: Path, device_name: str | Non
         "chunks": len(mels),
         "vote_share": winner_votes / len(mels),
         "votes": {classes[index]: count for index, count in votes.items()},
+        "class_probabilities": {
+            class_name: float(mean_probs[index])
+            for index, class_name in enumerate(classes)
+        },
     }
 
 
@@ -72,6 +95,9 @@ def main(argv: list[str] | None = None) -> None:
     print(f"Confidence: {result['confidence']:.2%}")
     print(f"Vote share: {result['vote_share']:.2%} across {result['chunks']} chunks")
     print(f"Votes: {result['votes']}")
+    print("Class probabilities:")
+    for class_name, probability in result["class_probabilities"].items():
+        print(f"  {class_name}: {probability:.2%}")
 
 
 if __name__ == "__main__":

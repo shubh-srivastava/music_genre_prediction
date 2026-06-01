@@ -96,10 +96,13 @@ def preprocess_dataset(
 
     rows: list[dict[str, str]] = []
     skipped = 0
-    for audio_path, genre, song_id in files:
+    for file_index, (audio_path, genre, song_id) in enumerate(files, start=1):
+        split = split_map[audio_path]
+        print(f"[{file_index}/{len(files)}] Processing {audio_path} | label={genre} | split={split}")
         mels = audio_to_mels(audio_path, config)
         if not mels:
             skipped += 1
+            print(f"  Skipped: shorter than {config.segment_seconds:.1f} seconds")
             continue
 
         for chunk_index, mel in enumerate(mels):
@@ -114,11 +117,12 @@ def preprocess_dataset(
                     "path": str(image_path.relative_to(output_dir)),
                     "label": genre,
                     "label_index": str(label_to_index[genre]),
-                    "split": split_map[audio_path],
+                    "split": split,
                     "song_id": song_id,
                     "chunk_index": str(chunk_index),
                 }
             )
+        print(f"  Generated {len(mels)} spectrogram images")
 
     manifest_path = write_manifest(output_dir, rows)
     write_json(
