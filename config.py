@@ -35,7 +35,8 @@ class AudioConfig:
 
 AUDIO_EXTENSIONS = {".au", ".flac", ".m4a", ".mp3", ".ogg", ".wav"}
 
-DEFAULT_AUDIO_ROOT = Path("data")
+DEFAULT_SOURCE_AUDIO_ROOT = Path("data_raw")
+DEFAULT_AUDIO_ROOT = Path("data_processed")
 DEFAULT_OUTPUT_DIR = Path("spectrograms")
 DEFAULT_CHECKPOINT_DIR = Path("checkpoints")
 DEFAULT_REPORT_DIR = Path("reports")
