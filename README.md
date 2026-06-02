@@ -1,133 +1,182 @@
 # Music Genre Prediction
 
-PyTorch music genre classifier that converts songs into Mel-spectrogram images and trains a CNN on those images.
+This project classifies songs into music genres using a CNN trained on Mel-spectrogram images. Raw songs are first normalized into a balanced processed dataset, then converted into spectrogram PNG images, and finally used to train a ResNet-18 classifier.
 
-The folders inside `data_raw/` are the labels. For example, songs in `data_raw/bollypop/` are labeled `bollypop`, songs in `data_raw/carnatic/` are labeled `carnatic`, and so on.
-
-The pipeline avoids data leakage: songs are split into train/validation/test sets before they are sliced into 3-second spectrogram images, so chunks from the same song never appear in multiple splits.
-
-## Project Structure
+The raw dataset is expected to use folder names as labels:
 
 ```text
-prepare_audio_data.py           # Trim/split raw songs into data_processed/
-preprocess.py                   # Convert audio to Mel-spectrogram PNG images
-train.py                        # Train the ResNet-18 CNN classifier
-evaluate.py                     # Evaluate a checkpoint
-predict.py                      # Predict one audio file
-predict_folder.py               # Predict every audio file in predict/
-audio.py                        # Audio loading and Mel-spectrogram image creation
-config.py                       # Shared paths and audio settings
-dataset.py                      # PyTorch Dataset for generated PNG spectrograms
-model.py                        # ResNet-18 CNN model factory
-utils.py                        # Shared helpers
+data_raw/
+  bollywood/
+  classical/
+  edm/
+  ghazal/
+  hiphop/
+  indian_indie/
+  punjabi/
+```
+
+## Project Files
+
+```text
+prepare_audio_data.py    # Trim/split raw songs into data_processed/
+preprocess.py            # Convert processed audio to Mel-spectrogram PNG images
+train.py                 # Train the CNN model
+evaluate.py              # Evaluate a checkpoint and save a confusion matrix
+predict.py               # Predict one audio file
+predict_folder.py        # Predict all songs inside predict/
+app.py                   # Streamlit upload frontend
+
+audio.py                 # Audio loading and spectrogram conversion helpers
+config.py                # Shared paths and audio settings
+dataset.py               # PyTorch Dataset for spectrogram images
+model.py                 # ResNet-18 model factory
+utils.py                 # Shared utility functions
+requirements.txt         # Python dependencies
 ```
 
 ## Setup
 
-```bash
+```powershell
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-Install the CUDA-enabled PyTorch build if you want GPU training on a compatible machine. Follow the selector at https://pytorch.org/get-started/locally/ and then install the remaining packages from `requirements.txt`.
+If you want GPU training, install the CUDA-enabled PyTorch build that matches your system from the official PyTorch install selector, then install the rest of the requirements.
 
-## Dataset Layout
+## Data Preparation
 
-Place songs directly under genre folders in `data_raw/`:
+The project keeps raw data and generated data separate.
 
 ```text
-data_raw/
-  bollypop/
-    bp01.mp3
-  carnatic/
-    c01.mp3
-  ghazal/
-    g01.mp3
-  semiclassical/
-    sc01.mp3
-  sufi/
-    s01.mp3
+data_raw/         # original audio dataset, ignored by git
+data_processed/   # trimmed/split WAV clips, ignored by git
+spectrograms/     # generated PNG spectrogram images, ignored by git
+checkpoints/      # trained model checkpoints, can be committed
 ```
 
-Supported extensions: `.au`, `.flac`, `.m4a`, `.mp3`, `.ogg`, `.wav`.
+Prepare balanced audio clips:
 
-## Run
-
-Prepare balanced processed audio. This reads `data_raw/`, trims or splits songs to keep each genre near 300 minutes, renames the clips, and writes them to `data_processed/`:
-
-```bash
+```powershell
 python prepare_audio_data.py --source-dir data_raw --output-dir data_processed --overwrite
 ```
 
-Preprocess the processed audio into PNG Mel-spectrogram images:
+This step targets about 300 minutes per genre. Classical-style genres such as `classical`, `carnatic`, `ghazal`, and `semiclassical` are split into 3-minute sections. Genres such as `bollywood`, `bollypop`, `edm`, `hiphop`, `indian_indie`, `punjabi`, and `sufi` use center trimming for songs longer than 4 minutes, keeping about 3 minutes from the middle.
 
-```bash
+Convert processed audio into Mel-spectrogram images:
+
+```powershell
 python preprocess.py --audio-root data_processed --output-dir spectrograms --overwrite
 ```
 
+This writes:
+
+```text
+spectrograms/images/
+spectrograms/manifest.csv
+spectrograms/metadata.json
+```
+
+The manifest maps every spectrogram image to its label, split, source song id, and chunk index.
+
+## Training
+
 Train the CNN:
 
-```bash
-python train.py --output-dir spectrograms --epochs 20 --batch-size 32
+```powershell
+python train.py --output-dir spectrograms --epochs 50 --batch-size 128
 ```
 
-Training uses validation-loss early stopping by default. It stops after 5 epochs without a meaningful validation loss reduction. You can tune it:
-
-```bash
-python train.py --output-dir spectrograms --epochs 50 --early-stopping-patience 7 --min-delta 0.001
-```
-
-For CPU training on a 12-thread machine, keep two threads free for system responsiveness and use 10 training threads:
+For a 12-thread CPU, keep two threads free for system responsiveness:
 
 ```powershell
 $env:OMP_NUM_THREADS=10
 $env:MKL_NUM_THREADS=10
 $env:OPENBLAS_NUM_THREADS=10
+
 python train.py --output-dir spectrograms --epochs 50 --batch-size 128 --num-workers 10 --torch-threads 10 --torch-interop-threads 10
 ```
 
-If memory allows, try `--batch-size 256`. If loading images becomes the bottleneck, try `--num-workers 6`, `8`, or `10` and compare epoch time.
+If memory allows, try `--batch-size 256`. If image loading is the bottleneck, compare `--num-workers 6`, `8`, and `10`.
 
-Evaluate on the held-out test split:
+Training uses validation-loss early stopping by default:
 
-```bash
+```powershell
+python train.py --output-dir spectrograms --epochs 50 --early-stopping-patience 7 --min-delta 0.001
+```
+
+Disable early stopping with:
+
+```powershell
+python train.py --output-dir spectrograms --epochs 50 --early-stopping-patience 0
+```
+
+The best model is saved to:
+
+```text
+checkpoints/best_model.pt
+```
+
+## Evaluation
+
+Evaluate the held-out test split:
+
+```powershell
 python evaluate.py --output-dir spectrograms --checkpoint checkpoints/best_model.pt
 ```
 
+This prints a classification report and writes a confusion matrix to `reports/`.
+
+## Prediction
+
 Predict one song:
 
-```bash
-python predict.py path\to\song.wav --checkpoint checkpoints/best_model.pt
+```powershell
+python predict.py path\to\song.mp3 --checkpoint checkpoints\best_model.pt
 ```
 
-Predict every supported audio file inside the `predict/` folder and write a CSV:
+The script prints:
 
-```bash
-python predict_folder.py --input-dir predict --checkpoint checkpoints/best_model.pt --output-csv predictions.csv
+- predicted genre
+- confidence
+- chunk vote share
+- votes by class
+- probabilities for every class
+
+Predict all songs in the `predict/` folder:
+
+```powershell
+python predict_folder.py --input-dir predict --checkpoint checkpoints\best_model.pt --output-csv predictions.csv
 ```
 
-Run the Streamlit frontend:
+This prints results for every supported audio file and writes `predictions.csv`.
 
-```bash
+## Streamlit Frontend
+
+Run the upload UI:
+
+```powershell
 streamlit run app.py
 ```
 
-The frontend shows the prediction progress step by step: checkpoint loading, song slicing, spectrogram image creation, tensor conversion, CNN inference, and majority-vote aggregation.
+The frontend lets you upload a song and shows each prediction step: checkpoint loading, song slicing, spectrogram image creation, tensor conversion, CNN inference, and majority-vote aggregation. It then displays the predicted genre and per-class probabilities.
 
-## Generated Files
+## Model
 
-- `data_processed/` contains trimmed/split and renamed WAV clips used for spectrogram preprocessing.
-- `spectrograms/images/` contains generated spectrogram PNG files.
-- `spectrograms/manifest.csv` maps each spectrogram image to its label and split.
-- `spectrograms/metadata.json` stores class names and audio preprocessing settings.
-- `checkpoints/best_model.pt` stores the best trained CNN checkpoint.
-- `predictions.csv` stores batch prediction results when using `predict_folder.py`.
+The classifier uses ResNet-18 from `torchvision`. ResNet-18 is a CNN originally designed for image classification. This project converts audio into spectrogram images, so the genre task becomes an image classification task. The model uses transfer learning by default and replaces the final classification layer with one output per music genre.
 
-## Notes
+Use `--no-pretrained` if you want to train without pretrained ImageNet weights.
 
-- Training uses ImageNet-pretrained ResNet-18 by default. The first run may download model weights through `torchvision`.
-- Use `--no-pretrained` for offline smoke tests or when you explicitly want random initialization.
-- The source songs remain in `data_raw/`; `prepare_audio_data.py` writes normalized audio clips to `data_processed/`.
-- Classical-style folders such as `classical`, `carnatic`, `ghazal`, and `semiclassical` are split into 3-minute sections until the genre reaches about 300 minutes.
-- Folders such as `bollywood`, `bollypop`, `edm`, `hiphop`, and `indian_indie` use center trimming for songs longer than 4 minutes, keeping about 3 minutes from the middle.
+## Git Policy
+
+Data files are intentionally ignored:
+
+- `data/`
+- `data_raw/`
+- `data_processed/`
+- `spectrograms/`
+- `predict/`
+- `reports/`
+- audio files such as `.mp3`, `.wav`, `.flac`, `.ogg`, `.m4a`, `.au`
+
+Model checkpoints are not ignored, so `checkpoints/best_model.pt` can be committed when you want to include a trained model in the repository.
