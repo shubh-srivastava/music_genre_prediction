@@ -6,10 +6,11 @@ The raw dataset is expected to use folder names as labels:
 
 ```text
 data_raw/
-  bollywood/
+  bollywood_new/
+  bollywood_old/
   classical/
   edm/
-  ghazal/
+  ghazhal/
   hiphop/
   indian_indie/
   punjabi/
@@ -55,13 +56,18 @@ spectrograms/     # generated PNG spectrogram images, ignored by git
 checkpoints/      # trained model checkpoints, can be committed
 ```
 
-Prepare balanced audio clips:
+Prepare fixed 3-minute audio clips:
 
 ```powershell
 python prepare_audio_data.py --source-dir data_raw --output-dir data_processed --overwrite
 ```
 
-This step targets about 300 minutes per genre. Classical-style genres such as `classical`, `carnatic`, `ghazal`, and `semiclassical` are split into 3-minute sections. Genres such as `bollywood`, `bollypop`, `edm`, `hiphop`, `indian_indie`, `punjabi`, and `sufi` use center trimming for songs longer than 4 minutes, keeping about 3 minutes from the middle.
+This step follows two preparation rules:
+
+- `edm`, `hiphop`, `indian_indie`, `punjabi`, `bollywood_new`, and `bollywood_old`: create one centered 3-minute WAV clip from each source file.
+- `classical` and `ghazhal`: split source audio into exactly 100 sequential 3-minute WAV clips.
+
+Other folders are skipped unless a policy is added in `prepare_audio_data.py`.
 
 Convert processed audio into Mel-spectrogram images:
 

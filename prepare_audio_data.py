@@ -1,7 +1,10 @@
-"""Prepare balanced genre audio folders before spectrogram preprocessing.
+"""Prepare fixed 3-minute audio clips before spectrogram preprocessing.
 
-This script reads labeled audio folders from data/, trims or splits songs by
-genre policy, renames the resulting clips, and writes them into data_processed/.
+Rules:
+- edm, hiphop, indian_indie, punjabi, bollywood_new, and bollywood_old:
+  write one centered 3-minute clip for each source file.
+- classical and ghazhal:
+  split source audio into exactly 100 sequential 3-minute clips.
 """
 
 from __future__ import annotations
@@ -15,6 +18,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import librosa
+import numpy as np
 import soundfile as sf
 
 from config import AUDIO_EXTENSIONS, DEFAULT_SOURCE_AUDIO_ROOT
@@ -23,46 +27,30 @@ from config import AUDIO_EXTENSIONS, DEFAULT_SOURCE_AUDIO_ROOT
 @dataclass(frozen=True)
 class PreparationConfig:
     sample_rate: int = 22_050
-    target_minutes_per_genre: float = 300.0
     clip_minutes: float = 3.0
-    long_song_minutes: float = 4.0
-    min_clip_seconds: float = 30.0
-
-    @property
-    def target_seconds(self) -> float:
-        return self.target_minutes_per_genre * 60.0
+    split_clip_count: int = 100
 
     @property
     def clip_seconds(self) -> float:
         return self.clip_minutes * 60.0
 
     @property
-    def long_song_seconds(self) -> float:
-        return self.long_song_minutes * 60.0
+    def clip_samples(self) -> int:
+        return int(self.clip_seconds * self.sample_rate)
 
 
-SPLIT_GENRES = {
-    "classical",
-    # "carnatic",
-    # "gazal",
-    # "gazals",
-    "ghazhal",
-    # "ghazals",
-    # "semiclassical",
-}
-
-CENTER_TRIM_GENRES = {
-    "bollywood",
-    # "bollypop",
+ONE_CLIP_PER_FILE_GENRES = {
     "edm",
     "hiphop",
-    # "hh",
-    # "indian_indie",
     "indian_indie",
-    # "indie",
-    # "indina_indie",
     "punjabi",
-    # "sufi",
+    "bollywood_new",
+    "bollywood_old",
+}
+
+SPLIT_TO_100_GENRES = {
+    "classical",
+    "ghazhal",
 }
 
 
@@ -72,15 +60,13 @@ def normalize_label(name: str) -> str:
     return label.strip("_")
 
 
-def policy_for_genre(label: str) -> str:
+def policy_for_genre(label: str) -> str | None:
     normalized = normalize_label(label)
-    if normalized in {"ghazal", "ghazals", "gazal", "gazals"}:
-        return "split"
-    if normalized in SPLIT_GENRES:
-        return "split"
-    if normalized in CENTER_TRIM_GENRES:
-        return "center_trim"
-    return "center_trim"
+    if normalized in ONE_CLIP_PER_FILE_GENRES:
+        return "one_center_clip_per_file"
+    if normalized in SPLIT_TO_100_GENRES:
+        return "split_to_100"
+    return None
 
 
 def discover_audio_files(folder: Path) -> list[Path]:
@@ -91,32 +77,123 @@ def discover_audio_files(folder: Path) -> list[Path]:
     )
 
 
-def load_audio(path: Path, sample_rate: int):
+def load_audio(path: Path, sample_rate: int) -> np.ndarray:
     signal, _ = librosa.load(path, sr=sample_rate, mono=True)
-    return signal
+    return signal.astype(np.float32, copy=False)
 
 
-def center_crop(signal, sample_rate: int, seconds: float):
-    target_samples = min(len(signal), int(seconds * sample_rate))
-    start = max(0, (len(signal) - target_samples) // 2)
-    end = start + target_samples
-    return signal[start:end]
+def center_crop_or_pad(signal: np.ndarray, target_samples: int) -> np.ndarray:
+    if len(signal) >= target_samples:
+        start = (len(signal) - target_samples) // 2
+        return signal[start : start + target_samples]
+
+    padded = np.zeros(target_samples, dtype=np.float32)
+    start = (target_samples - len(signal)) // 2
+    padded[start : start + len(signal)] = signal
+    return padded
 
 
-def iter_split_clips(signal, sample_rate: int, clip_seconds: float):
-    clip_samples = int(clip_seconds * sample_rate)
-    for start in range(0, len(signal), clip_samples):
-        end = min(start + clip_samples, len(signal))
-        yield signal[start:end]
-
-
-def clip_duration(signal, sample_rate: int) -> float:
-    return len(signal) / sample_rate
-
-
-def write_clip(path: Path, signal, sample_rate: int) -> None:
+def write_clip(path: Path, signal: np.ndarray, sample_rate: int) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     sf.write(path, signal, sample_rate)
+
+
+def add_manifest_row(
+    rows: list[dict[str, str]],
+    label: str,
+    policy: str,
+    source_path: Path,
+    output_path: Path,
+    source_index: int,
+    clip_index: int,
+    config: PreparationConfig,
+) -> None:
+    rows.append(
+        {
+            "label": label,
+            "policy": policy,
+            "source_path": str(source_path),
+            "output_path": str(output_path),
+            "source_index": str(source_index),
+            "clip_index": str(clip_index),
+            "duration_seconds": f"{config.clip_seconds:.3f}",
+        }
+    )
+
+
+def prepare_one_clip_per_file(
+    genre_dir: Path,
+    output_root: Path,
+    config: PreparationConfig,
+) -> list[dict[str, str]]:
+    label = normalize_label(genre_dir.name)
+    policy = "one_center_clip_per_file"
+    files = discover_audio_files(genre_dir)
+    output_dir = output_root / label
+    rows: list[dict[str, str]] = []
+
+    print(f"\nPreparing genre: {label}")
+    print(f"  policy={policy} source_files={len(files)} output_clips={len(files)}")
+
+    for index, source_path in enumerate(files, start=1):
+        signal = load_audio(source_path, config.sample_rate)
+        clip = center_crop_or_pad(signal, config.clip_samples)
+        output_path = output_dir / f"{label}{index:03d}.wav"
+        write_clip(output_path, clip, config.sample_rate)
+        add_manifest_row(rows, label, policy, source_path, output_path, index, index, config)
+        print(f"  [{index}/{len(files)}] {source_path.name} -> {output_path.name}")
+
+    return rows
+
+
+def prepare_split_to_100(
+    genre_dir: Path,
+    output_root: Path,
+    config: PreparationConfig,
+) -> list[dict[str, str]]:
+    label = normalize_label(genre_dir.name)
+    policy = "split_to_100"
+    files = discover_audio_files(genre_dir)
+    output_dir = output_root / label
+    rows: list[dict[str, str]] = []
+    output_index = 1
+
+    print(f"\nPreparing genre: {label}")
+    print(f"  policy={policy} target_clips={config.split_clip_count} source_files={len(files)}")
+
+    for source_index, source_path in enumerate(files, start=1):
+        if output_index > config.split_clip_count:
+            break
+
+        signal = load_audio(source_path, config.sample_rate)
+        full_clip_count = len(signal) // config.clip_samples
+        print(f"  [{source_index}/{len(files)}] {source_path.name} full_3min_clips={full_clip_count}")
+
+        for chunk_index in range(full_clip_count):
+            if output_index > config.split_clip_count:
+                break
+
+            start = chunk_index * config.clip_samples
+            clip = signal[start : start + config.clip_samples]
+            output_path = output_dir / f"{label}{output_index:03d}.wav"
+            write_clip(output_path, clip, config.sample_rate)
+            add_manifest_row(
+                rows,
+                label,
+                policy,
+                source_path,
+                output_path,
+                source_index,
+                output_index,
+                config,
+            )
+            print(f"    wrote {output_path.name}")
+            output_index += 1
+
+    if len(rows) < config.split_clip_count:
+        print(f"  warning: only created {len(rows)}/{config.split_clip_count} clips")
+
+    return rows
 
 
 def prepare_genre(
@@ -126,75 +203,14 @@ def prepare_genre(
 ) -> list[dict[str, str]]:
     label = normalize_label(genre_dir.name)
     policy = policy_for_genre(label)
-    files = discover_audio_files(genre_dir)
-    output_dir = output_root / label
-    rows: list[dict[str, str]] = []
-    total_seconds = 0.0
-    output_index = 1
-
-    print(f"\nPreparing genre: {label}")
-    print(f"  source_files={len(files)} policy={policy} target={config.target_minutes_per_genre:.0f} minutes")
-
-    for file_index, source_path in enumerate(files, start=1):
-        if total_seconds >= config.target_seconds:
-            break
-        if config.target_seconds - total_seconds < config.min_clip_seconds:
-            break
-
-        signal = load_audio(source_path, config.sample_rate)
-        source_seconds = clip_duration(signal, config.sample_rate)
-        remaining_seconds = config.target_seconds - total_seconds
-        print(f"  [{file_index}/{len(files)}] {source_path.name} duration={source_seconds / 60:.2f} min")
-
-        if policy == "split":
-            candidate_clips = iter_split_clips(signal, config.sample_rate, config.clip_seconds)
-        else:
-            if source_seconds > config.long_song_seconds:
-                seconds = min(config.clip_seconds, remaining_seconds)
-                candidate_clips = [center_crop(signal, config.sample_rate, seconds)]
-            else:
-                seconds = min(source_seconds, remaining_seconds)
-                candidate_clips = [center_crop(signal, config.sample_rate, seconds)]
-
-        for clip in candidate_clips:
-            if total_seconds >= config.target_seconds:
-                break
-
-            remaining_seconds = config.target_seconds - total_seconds
-            if remaining_seconds < config.min_clip_seconds:
-                break
-            current_seconds = clip_duration(clip, config.sample_rate)
-            if current_seconds > remaining_seconds:
-                clip = center_crop(clip, config.sample_rate, remaining_seconds)
-                current_seconds = clip_duration(clip, config.sample_rate)
-
-            if current_seconds < config.min_clip_seconds:
-                print(f"    skipped short remainder={current_seconds:.1f}s")
-                continue
-
-            output_path = output_dir / f"{label}{output_index:03d}.wav"
-            write_clip(output_path, clip, config.sample_rate)
-            total_seconds += current_seconds
-            rows.append(
-                {
-                    "label": label,
-                    "policy": policy,
-                    "source_path": str(source_path),
-                    "output_path": str(output_path),
-                    "duration_seconds": f"{current_seconds:.3f}",
-                }
-            )
-            print(f"    wrote {output_path.name} duration={current_seconds / 60:.2f} min")
-            output_index += 1
-
-    print(f"  total_written={total_seconds / 60:.2f} minutes clips={len(rows)}")
-    shortfall_seconds = config.target_seconds - total_seconds
-    if shortfall_seconds > 1.0:
-        print(
-            "  warning: genre did not reach target; "
-            f"short by {shortfall_seconds / 60:.2f} minutes"
-        )
-    return rows
+    if policy is None:
+        print(f"\nSkipping genre: {label} (no preparation policy)")
+        return []
+    if policy == "one_center_clip_per_file":
+        return prepare_one_clip_per_file(genre_dir, output_root, config)
+    if policy == "split_to_100":
+        return prepare_split_to_100(genre_dir, output_root, config)
+    raise ValueError(f"Unknown policy for {label}: {policy}")
 
 
 def prepare_all(
@@ -224,7 +240,15 @@ def prepare_all(
     with manifest_path.open("w", newline="", encoding="utf-8") as fp:
         writer = csv.DictWriter(
             fp,
-            fieldnames=["label", "policy", "source_path", "output_path", "duration_seconds"],
+            fieldnames=[
+                "label",
+                "policy",
+                "source_path",
+                "output_path",
+                "source_index",
+                "clip_index",
+                "duration_seconds",
+            ],
         )
         writer.writeheader()
         writer.writerows(all_rows)
@@ -234,9 +258,12 @@ def prepare_all(
         "output_dir": str(output_dir),
         "config": asdict(config),
         "total_clips": len(all_rows),
+        "clips_by_label": {},
         "minutes_by_label": {},
     }
     for row in all_rows:
+        metadata["clips_by_label"].setdefault(row["label"], 0)
+        metadata["clips_by_label"][row["label"]] += 1
         metadata["minutes_by_label"].setdefault(row["label"], 0.0)
         metadata["minutes_by_label"][row["label"]] += float(row["duration_seconds"]) / 60.0
 
@@ -250,10 +277,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-dir", type=Path, default=DEFAULT_SOURCE_AUDIO_ROOT)
     parser.add_argument("--output-dir", type=Path, default=Path("data_processed"))
-    parser.add_argument("--target-minutes", type=float, default=300.0)
     parser.add_argument("--clip-minutes", type=float, default=3.0)
-    parser.add_argument("--long-song-minutes", type=float, default=4.0)
-    parser.add_argument("--min-clip-seconds", type=float, default=30.0)
+    parser.add_argument("--split-clip-count", type=int, default=100)
     parser.add_argument("--sample-rate", type=int, default=22_050)
     parser.add_argument("--overwrite", action="store_true")
     return parser
@@ -263,10 +288,8 @@ def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
     config = PreparationConfig(
         sample_rate=args.sample_rate,
-        target_minutes_per_genre=args.target_minutes,
         clip_minutes=args.clip_minutes,
-        long_song_minutes=args.long_song_minutes,
-        min_clip_seconds=args.min_clip_seconds,
+        split_clip_count=args.split_clip_count,
     )
     prepare_all(args.source_dir, args.output_dir, config, overwrite=args.overwrite)
 

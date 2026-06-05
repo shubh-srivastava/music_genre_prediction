@@ -12,7 +12,7 @@ data_raw/
 data_processed/
 spectrograms/
 predict/
-reports/
+# reports/
 predictions.csv
 *.wav
 *.mp3
