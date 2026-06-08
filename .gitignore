@@ -28,3 +28,4 @@ extract_song_names.py
 predict/
 
 data/
+context.txt

@@ -10,7 +10,7 @@ from typing import Any
 @dataclass(frozen=True)
 class AudioConfig:
     sample_rate: int = 22_050
-    segment_seconds: float = 3.0
+    segment_seconds: float = 5.0
     n_fft: int = 2_048
     hop_length: int = 512
     n_mels: int = 128
