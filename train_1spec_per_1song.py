@@ -167,6 +167,7 @@ def train(args: argparse.Namespace) -> Path:
             "epoch": epoch,
             "model_state": model.state_dict(),
             "classes": classes,
+            "audio_config": metadata.get("audio_config"),
             "image_size": image_size,
             "val_loss": val_loss,
             "val_acc": val_acc,

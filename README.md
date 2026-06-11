@@ -199,6 +199,14 @@ streamlit run app.py
 
 The frontend lets you upload a song and shows each prediction step: checkpoint loading, song slicing, spectrogram image creation, tensor conversion, CNN inference, and majority-vote aggregation. It then displays the predicted genre and per-class probabilities.
 
+Run the one-song/one-spectrogram demo UI:
+
+```powershell
+streamlit run app_demo.py
+```
+
+This demo uses `checkpoints_1spec_per_1song/best_model.pt` by default, creates one full-song spectrogram from the upload, and predicts from that single image.
+
 ## Model
 
 The classifier uses ResNet-18 from `torchvision`. ResNet-18 is a CNN originally designed for image classification. This project converts audio into spectrogram images, so the genre task becomes an image classification task. The model uses transfer learning by default and replaces the final classification layer with one output per music genre.
