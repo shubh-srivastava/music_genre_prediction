@@ -87,6 +87,38 @@ The manifest maps every spectrogram image to its label, split, source song id, a
 
 ## Training
 
+## One Spectrogram Per Song Experiment
+
+If the chunk-level model is not performing well, use this alternate pipeline.
+It creates one full-song Mel-spectrogram image for each song in `data_raw/`,
+then trains and validates a separate model from those images.
+
+Create one spectrogram image per raw song:
+
+```powershell
+python preprocess_1spec_per_1song.py --audio-root data_raw --output-dir spectrograms_1spec_per_1song --overwrite
+```
+
+Train the alternate model:
+
+```powershell
+python train_1spec_per_1song.py --output-dir spectrograms_1spec_per_1song --epochs 50 --early-stopping-patience 10 --min-delta 0.001
+```
+
+Validate or test the alternate model:
+
+```powershell
+python validate_1spec_per_1song.py --output-dir spectrograms_1spec_per_1song --checkpoint checkpoints_1spec_per_1song/best_model.pt --split test
+```
+
+This keeps all artifacts separate from the existing chunk-based pipeline:
+
+```text
+spectrograms_1spec_per_1song/
+checkpoints_1spec_per_1song/
+reports/training_log_1spec_per_1song.csv
+```
+
 Train the CNN:
 
 ```powershell

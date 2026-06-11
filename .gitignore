@@ -29,3 +29,6 @@ predict/
 
 data/
 context.txt
+spectrograms_1spec_per_1song/
+
+useful_yt-dlp_commands.txt
